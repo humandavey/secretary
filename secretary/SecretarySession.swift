@@ -50,6 +50,12 @@ final class SecretarySession: ObservableObject {
         whiteboard.onVisibilityChange = { [weak self] visible in
             self?.whiteboardVisible = visible
         }
+        whiteboard.speakLine = { [weak self] text, force, finished in
+            self?.overlay.speak(text, force: force, whenFinished: finished)
+        }
+        whiteboard.stopSpeech = { [weak self] in
+            self?.overlay.stopSpeaking()
+        }
         speech.onFinished = { [weak self] text in
             self?.askAboutScreen(text)
         }
@@ -120,7 +126,11 @@ final class SecretarySession: ObservableObject {
     }
 
     func repeatAnswer() {
-        overlay.speak(answerSpeech, force: true)
+        if whiteboard.hasLesson {
+            whiteboard.replay()
+        } else {
+            overlay.speak(answerSpeech, force: true)
+        }
     }
 
     func previewSpeech() {
@@ -198,18 +208,37 @@ final class SecretarySession: ObservableObject {
             guard !Task.isCancelled, requestID == id else { return }
 
             let ready = explanation.normalized().placed(in: captured.region, on: captured.screen.frame.size)
-            guard !ready.speech.isEmpty else {
+            let lesson = WhiteboardHTML.lesson(in: ready.whiteboardHTML)
+            let lessonSpeaks = lesson.beats.contains { !$0.say.isEmpty }
+            guard !ready.speech.isEmpty || lessonSpeaks else {
                 throw ExplainerError.message("The model didn't say anything about this screen.")
-            }
-            if !ready.whiteboardHTML.isEmpty {
-                whiteboard.present(html: ready.whiteboardHTML, title: ready.title, on: captured.screen)
-                whiteboardAvailable = true
             }
             phase = .presenting
             statusText = ready.annotations.isEmpty ? "" : "Drew \(ready.annotations.count) on your screen."
             answerTitle = ready.title
-            answerSpeech = ready.speech
-            overlay.present(explanation: ready, on: captured.screen, speaks: !spokeEarly)
+            if lessonSpeaks {
+                answerSpeech = ""
+                whiteboard.play(
+                    intro: ready.speech,
+                    preamble: lesson.preamble,
+                    beats: lesson.beats,
+                    title: ready.title,
+                    on: captured.screen,
+                    speaks: speechSettings.speaksAnswers && !spokeEarly,
+                    onTranscript: { [weak self] text in
+                        self?.answerSpeech = text
+                    }
+                )
+                whiteboardAvailable = true
+                overlay.present(explanation: ready, on: captured.screen, speaks: false)
+            } else {
+                if !ready.whiteboardHTML.isEmpty {
+                    whiteboard.present(html: ready.whiteboardHTML, title: ready.title, on: captured.screen)
+                    whiteboardAvailable = true
+                }
+                answerSpeech = ready.speech
+                overlay.present(explanation: ready, on: captured.screen, speaks: !spokeEarly)
+            }
         } catch is CancellationError {
             return
         } catch {

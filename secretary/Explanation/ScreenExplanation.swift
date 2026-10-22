@@ -302,6 +302,18 @@ nonisolated struct ScreenExplanation {
     }
 }
 
+nonisolated struct LessonBeat {
+    var say: String
+    var html: String
+}
+
+nonisolated struct WhiteboardLesson {
+    var preamble: String
+    var beats: [LessonBeat]
+
+    static let empty = WhiteboardLesson(preamble: "", beats: [])
+}
+
 /// HTML fragment the API model may append after its JSON answer.
 nonisolated enum WhiteboardHTML {
     static let maximumLength = 24_000
@@ -318,6 +330,16 @@ nonisolated enum WhiteboardHTML {
             raw = String(after)
         }
         return sanitize(raw)
+    }
+
+    /// Splits a lesson into spoken beats. No beat sections means the board stays one picture.
+    static func lesson(in html: String) -> WhiteboardLesson {
+        let ranges = beatRanges(in: html)
+        guard !ranges.isEmpty else { return .empty }
+        let used = ranges.prefix(6)
+        let beats = used.map { section(String(html[$0])) }.filter { !$0.html.isEmpty || !$0.say.isEmpty }
+        guard beats.contains(where: { !$0.say.isEmpty }) else { return .empty }
+        return WhiteboardLesson(preamble: gaps(in: html, excluding: ranges), beats: beats)
     }
 
     /// Reply text before the whiteboard marker, so JSON parsing never sees the markup.
@@ -375,6 +397,108 @@ nonisolated enum WhiteboardHTML {
         let trailing = throughEndIfUnclosed ? ".*" : "/?>"
         let pattern = "<\(tag)\\b[^>]*>(?:.*?)</\(tag)\\s*>|<\(tag)\\b[^>]*\(trailing)"
         return replacing(pattern, in: html)
+    }
+
+    private static func beatRanges(in html: String) -> [Range<String.Index>] {
+        var ranges: [Range<String.Index>] = []
+        var search = html.startIndex
+        while search < html.endIndex, let open = beatOpenTag(in: html, from: search) {
+            guard let close = sectionClose(in: html, from: open.upperBound) else { break }
+            ranges.append(open.lowerBound..<close.upperBound)
+            search = close.upperBound
+        }
+        return ranges
+    }
+
+    private static func beatOpenTag(in html: String, from index: String.Index) -> Range<String.Index>? {
+        var search = index
+        while search < html.endIndex, let found = html.range(of: "<section", options: .caseInsensitive, range: search..<html.endIndex) {
+            guard let tagEnd = html[found.upperBound...].firstIndex(of: ">") else { return nil }
+            let tag = String(html[found.lowerBound...tagEnd])
+            let afterTag = html.index(after: tagEnd)
+            if isBeatTag(tag) {
+                return found.lowerBound..<afterTag
+            }
+            search = afterTag
+        }
+        return nil
+    }
+
+    private static func isBeatTag(_ tag: String) -> Bool {
+        replacing(#"\bclass\s*=\s*(['"])[^'"]*\bbeat\b[^'"]*\1"#, in: tag) != tag
+    }
+
+    private static func sectionClose(in html: String, from index: String.Index) -> Range<String.Index>? {
+        var depth = 1
+        var search = index
+        while search < html.endIndex {
+            let rest = html[search...]
+            let nextOpen = rest.range(of: "<section", options: .caseInsensitive)
+            let nextClose = rest.range(of: "</section", options: .caseInsensitive)
+            if let nextClose, nextOpen == nil || nextClose.lowerBound < nextOpen!.lowerBound {
+                var upper = nextClose.upperBound
+                if upper < html.endIndex, html[upper] == ">" {
+                    upper = html.index(after: upper)
+                }
+                depth -= 1
+                if depth == 0 { return nextClose.lowerBound..<upper }
+                search = upper
+            } else if let nextOpen {
+                depth += 1
+                search = nextOpen.upperBound
+            } else {
+                return nil
+            }
+        }
+        return nil
+    }
+
+    private static func gaps(in html: String, excluding ranges: [Range<String.Index>]) -> String {
+        var pieces: [String] = []
+        var cursor = html.startIndex
+        for range in ranges {
+            if cursor < range.lowerBound {
+                pieces.append(String(html[cursor..<range.lowerBound]))
+            }
+            cursor = range.upperBound
+        }
+        if cursor < html.endIndex {
+            pieces.append(String(html[cursor...]))
+        }
+        return pieces.joined().trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func section(_ html: String) -> LessonBeat {
+        LessonBeat(say: spokenSay(in: html), html: stripSay(html).trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    private static let sayPattern = #"<p\b[^>]*\bclass\s*=\s*(['"])[^'"]*\bsay\b[^'"]*\1[^>]*>(.*?)</p>"#
+
+    private static func spokenSay(in html: String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: sayPattern, options: [.caseInsensitive, .dotMatchesLineSeparators]) else {
+            return ""
+        }
+        let range = NSRange(html.startIndex..., in: html)
+        let lines = regex.matches(in: html, range: range).compactMap { match -> String? in
+            guard match.numberOfRanges > 2, let capture = Range(match.range(at: 2), in: html) else { return nil }
+            let plain = replacing(#"<[^>]+>"#, in: String(html[capture]))
+            return decode(plain).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return lines.filter { !$0.isEmpty }.joined(separator: " ")
+    }
+
+    private static func stripSay(_ html: String) -> String {
+        replacing(sayPattern, in: html)
+    }
+
+    private static func decode(_ text: String) -> String {
+        text.replacingOccurrences(of: "&nbsp;", with: " ")
+            .replacingOccurrences(of: "&amp;", with: "&")
+            .replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&#39;", with: "'")
+            .replacingOccurrences(of: "&apos;", with: "'")
     }
 
     private static func replacing(_ pattern: String, in text: String) -> String {

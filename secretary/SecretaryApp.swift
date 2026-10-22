@@ -69,6 +69,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
             .store(in: &cancellables)
+        session.$answerSpeech
+            .dropFirst()
+            .sink { [weak self] _ in
+                guard self?.popover.isShown == true else { return }
+                DispatchQueue.main.async {
+                    self?.resizePopover()
+                }
+            }
+            .store(in: &cancellables)
         session.hideInterface = { [weak self] in
             self?.closePopover()
         }

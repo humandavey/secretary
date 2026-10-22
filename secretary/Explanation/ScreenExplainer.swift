@@ -45,12 +45,20 @@ enum ExplainerPrompt {
     shape is circle, rectangle, or arrow. Use an empty annotations array when no mark is needed.
 
     When you do not open a whiteboard, speech is two or three spoken sentences.
-    When you open a whiteboard, speech is the explanation. Use as many sentences as the concept needs, and walk through what is on the board. Do not read markup aloud.
+    When you open a whiteboard with one picture, speech is the explanation. Use as many sentences as the concept needs, and walk through what is on the board. Do not read markup aloud.
+    When a sequence would teach the idea better than one picture, write a lesson of at most six beats and keep speech to one short intro sentence. Do not retell the beats in speech.
 
     To open a whiteboard, put a newline after the JSON, then <<<BOARD>>>, then an HTML fragment, then <<<END>>>.
     The fragment is inline HTML, CSS, and SVG only. No script, no iframe, and no http or https URL.
     Draw charts and diagrams as SVG with a viewBox. Use rect, line, path, and text for bars, lines, arrows, and labels. Do not use a chart library.
-    Use h1, p, ul, and svg. A shared stylesheet already styles those. You may add one style block for the diagram.
+    Use h1, p, ul, and svg. A shared stylesheet already styles those. You may add style blocks and @keyframes.
+
+    A lesson beat adds only the new part of the drawing. Earlier beats stay on the board, so do not redraw them. Draw each step in its finished position, and use CSS only to bring that step in. Do not use SVG animate elements.
+    <section class="beat">
+      <p class="say">One or two spoken sentences about what just appeared.</p>
+      SVG or HTML for this step only.
+    </section>
+    Use beats only when the order matters. Otherwise use one diagram and no beat sections.
     """
 
     static let coordinates = """
@@ -318,24 +326,35 @@ struct ScreenExplainer {
 
         let endpoint = completionsURL(from: base)
         var tokenField = "max_tokens"
-        for _ in 0..<2 {
+        var includeTemperature = true
+        var swappedTokenField = false
+        var droppedTemperature = false
+        for _ in 0..<3 {
             let (data, response) = try await send(
                 endpoint: endpoint,
                 modelName: modelName,
                 apiKey: apiKey,
                 question: question,
                 jpeg: jpeg,
-                tokenField: tokenField
+                tokenField: tokenField,
+                includeTemperature: includeTemperature
             )
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-            if status == 400, tokenField == "max_tokens", let body = String(data: data, encoding: .utf8),
+            let body = String(data: data, encoding: .utf8) ?? ""
+            if status == 400, !swappedTokenField, tokenField == "max_tokens",
                body.localizedCaseInsensitiveContains("max_tokens") {
                 tokenField = "max_completion_tokens"
+                swappedTokenField = true
+                continue
+            }
+            if status == 400, !droppedTemperature, includeTemperature,
+               body.localizedCaseInsensitiveContains("temperature") {
+                includeTemperature = false
+                droppedTemperature = true
                 continue
             }
             guard (200..<300).contains(status) else {
-                let snippet = String(data: data, encoding: .utf8)?.prefix(240) ?? ""
-                throw ExplainerError.message("The model request failed (\(status)). \(snippet)")
+                throw ExplainerError.message("The model request failed (\(status)). \(body.prefix(240))")
             }
             return try decodeAnswer(data)
         }
@@ -353,11 +372,11 @@ struct ScreenExplainer {
         apiKey: String,
         question: String,
         jpeg: Data,
-        tokenField: String
+        tokenField: String,
+        includeTemperature: Bool
     ) async throws -> (Data, URLResponse) {
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "model": modelName,
-            "temperature": 0,
             tokenField: 8000,
             "messages": [
                 [
@@ -373,6 +392,9 @@ struct ScreenExplainer {
                 ]
             ]
         ]
+        if includeTemperature {
+            body["temperature"] = 0
+        }
 
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
