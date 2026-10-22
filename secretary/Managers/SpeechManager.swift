@@ -2,103 +2,166 @@
 //  SpeechManager.swift
 //  secretary
 //
-//  Created by Davey Adams on 10/21/26.
-//
 
-import Foundation
-import Speech
 import AVFoundation
 import Combine
+import Foundation
+import Speech
 
 @MainActor
 class SpeechManager: ObservableObject {
-    @Published var transcribedText: String = ""
-    @Published var isRecording: Bool = false
-    
+    @Published var transcribedText = ""
+    @Published var isRecording = false
+    @Published var warning: String?
+
+    var onFinished: ((String) -> Void)?
+
     private let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private let audioEngine = AVAudioEngine()
-    
+    private var engineRunning = false
+    private var tapInstalled = false
+    private var armToken = UUID()
+
     func toggleListening() {
         if isRecording {
-            stopRecording()
+            endSession(submit: true)
         } else {
-            startRecording()
+            arm()
         }
     }
-    
-    private func startRecording() {
-        stopRecording()
-        
-        SFSpeechRecognizer.requestAuthorization { authStatus in
-            guard authStatus == .authorized else { return }
-            
+
+    func cancelListening() {
+        if isRecording {
+            endSession(submit: false)
+        } else {
+            armToken = UUID()
+        }
+    }
+
+    private func arm() {
+        let token = UUID()
+        armToken = token
+        isRecording = true
+        warning = nil
+
+        SFSpeechRecognizer.requestAuthorization { [weak self] status in
             Task { @MainActor in
+                guard let self, self.armToken == token else { return }
+                guard status == .authorized else {
+                    self.isRecording = false
+                    self.warning = "Secretary needs Speech Recognition permission to hear you."
+                    return
+                }
                 do {
-                    try self.setupAudioAndStart()
+                    try self.beginEngine()
                 } catch {
-                    print("Error setting up local speech recognition: \(error)")
-                    self.stopRecording()
+                    self.warning = error.localizedDescription
+                    self.endSession(submit: false)
                 }
             }
         }
     }
-    
-    private func setupAudioAndStart() throws {
+
+    private func beginEngine() throws {
+        teardownAudio()
+        guard let speechRecognizer, speechRecognizer.isAvailable else {
+            throw SpeechError.unavailable
+        }
+
         isRecording = true
         transcribedText = ""
-        
-        recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-        guard let recognitionRequest = recognitionRequest else { return }
-        
-        recognitionRequest.requiresOnDeviceRecognition = true
-        recognitionRequest.shouldReportPartialResults = true
-        
+        warning = nil
+
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        request.requiresOnDeviceRecognition = true
+        request.shouldReportPartialResults = true
+        recognitionRequest = request
+
         let inputNode = audioEngine.inputNode
         let hardwareFormat = inputNode.outputFormat(forBus: 0)
-        
+        guard hardwareFormat.sampleRate > 0, hardwareFormat.channelCount > 0 else {
+            throw SpeechError.unavailable
+        }
         let recordingFormat = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: hardwareFormat.sampleRate,
             channels: 1,
             interleaved: false
         ) ?? hardwareFormat
-        
+
         inputNode.reset()
-        
-        let request = recognitionRequest
-        
-        try inputNode.installAudioTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { readOnlyBuffer, _ in
-            let pcmBuffer = AVAudioPCMBuffer(copying: readOnlyBuffer)
-            
-            Task { @MainActor in
-                request.append(pcmBuffer)
-            }
+        let bufferSize = AVAudioFrameCount(hardwareFormat.sampleRate * 0.1)
+        let tap: AVAudioNodeTapBlock = { [weak request] buffer, _ in
+            guard buffer.frameLength > 0 else { return }
+            let copy = AVAudioPCMBuffer(copying: buffer)
+            guard copy.frameLength > 0 else { return }
+            request?.append(copy)
         }
-        
+        // macOS 27 reports tap failure by throwing. The imported name is still the refined form, and the error slot is unused.
+        do {
+            try inputNode.__installTap(onBus: 0, bufferSize: bufferSize, format: recordingFormat, error: (), block: tap)
+        } catch {
+            try inputNode.__installTap(onBus: 0, bufferSize: bufferSize, format: hardwareFormat, error: (), block: tap)
+        }
+        tapInstalled = true
+
         audioEngine.prepare()
         try audioEngine.start()
-        
-        recognitionTask = speechRecognizer?.recognitionTask(with: recognitionRequest) { result, error in
-            if let result = result {
-                self.transcribedText = result.bestTranscription.formattedString
-            }
-            if error != nil || result?.isFinal == true {
-                self.stopRecording()
+        engineRunning = true
+
+        recognitionTask = speechRecognizer.recognitionTask(with: request) { [weak self] result, error in
+            Task { @MainActor in
+                guard let self, self.engineRunning else { return }
+                if let result {
+                    self.transcribedText = result.bestTranscription.formattedString
+                    if result.isFinal {
+                        self.endSession(submit: true)
+                        return
+                    }
+                }
+                if error != nil {
+                    self.endSession(submit: false)
+                }
             }
         }
     }
-    
-    func stopRecording() {
-        audioEngine.stop()
-        audioEngine.inputNode.removeTap(onBus: 0)
-        
+
+    private func endSession(submit: Bool) {
+        armToken = UUID()
+        let text = transcribedText
+        let shouldSubmit = submit && engineRunning
+        engineRunning = false
+        teardownAudio()
+        isRecording = false
+        guard shouldSubmit else { return }
+
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            onFinished?(trimmed)
+        }
+    }
+
+    private func teardownAudio() {
+        if tapInstalled {
+            audioEngine.inputNode.removeTap(onBus: 0)
+            tapInstalled = false
+        }
+        if audioEngine.isRunning {
+            audioEngine.stop()
+        }
         recognitionRequest?.endAudio()
         recognitionTask?.cancel()
-        
         recognitionRequest = nil
         recognitionTask = nil
-        isRecording = false
+    }
+}
+
+private enum SpeechError: LocalizedError {
+    case unavailable
+
+    var errorDescription: String? {
+        "On-device speech recognition isn't available right now."
     }
 }
