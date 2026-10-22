@@ -94,6 +94,7 @@ nonisolated struct ScreenExplanation {
     var title: String
     var speech: String
     var annotations: [ScreenMark]
+    var whiteboardHTML: String = ""
 
     func normalized() -> ScreenExplanation {
         let cleanedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -101,7 +102,8 @@ nonisolated struct ScreenExplanation {
         return ScreenExplanation(
             title: cleanedTitle.isEmpty ? "On your screen" : cleanedTitle,
             speech: speech,
-            annotations: Array(annotations.map { $0.asFraction() }.compactMap { $0.drawable() }.prefix(8))
+            annotations: Array(annotations.map { $0.asFraction() }.compactMap { $0.drawable() }.prefix(8)),
+            whiteboardHTML: WhiteboardHTML.sanitize(whiteboardHTML)
         )
     }
 
@@ -128,7 +130,7 @@ nonisolated struct ScreenExplanation {
             }
             return copy
         }
-        return ScreenExplanation(title: title, speech: speech, annotations: marks)
+        return ScreenExplanation(title: title, speech: speech, annotations: marks, whiteboardHTML: whiteboardHTML)
     }
 
     private static func spoken(_ text: String) -> String {
@@ -151,6 +153,13 @@ nonisolated struct ScreenExplanation {
     }
 
     static func parse(from modelText: String) -> ScreenExplanation {
+        let board = WhiteboardHTML.extract(from: modelText)
+        var explanation = parseAnswer(from: WhiteboardHTML.jsonPortion(from: modelText))
+        explanation.whiteboardHTML = board
+        return explanation.normalized()
+    }
+
+    private static func parseAnswer(from modelText: String) -> ScreenExplanation {
         let trimmed = modelText.trimmingCharacters(in: .whitespacesAndNewlines)
         if let object = jsonObject(from: trimmed) {
             let title = string(object["title"]) ?? "On your screen"
@@ -290,5 +299,90 @@ nonisolated struct ScreenExplanation {
         default:
             0
         }
+    }
+}
+
+/// HTML fragment the API model may append after its JSON answer.
+nonisolated enum WhiteboardHTML {
+    static let maximumLength = 24_000
+    private static let startMarker = "<<<BOARD>>>"
+    private static let endMarker = "<<<END>>>"
+
+    static func extract(from text: String) -> String {
+        guard let start = text.range(of: startMarker) else { return "" }
+        let after = text[start.upperBound...]
+        let raw: String
+        if let end = after.range(of: endMarker) {
+            raw = String(after[..<end.lowerBound])
+        } else {
+            raw = String(after)
+        }
+        return sanitize(raw)
+    }
+
+    /// Reply text before the whiteboard marker, so JSON parsing never sees the markup.
+    static func jsonPortion(from text: String) -> String {
+        guard let start = text.range(of: startMarker) else { return text }
+        return String(text[..<start.lowerBound])
+    }
+
+    static func sanitize(_ html: String) -> String {
+        var text = stripFence(html.trimmingCharacters(in: .whitespacesAndNewlines))
+        for tag in ["script", "iframe", "object", "embed"] {
+            text = removeElements(named: tag, in: text, throughEndIfUnclosed: true)
+        }
+        for tag in ["link", "meta", "base", "form"] {
+            text = removeElements(named: tag, in: text, throughEndIfUnclosed: false)
+        }
+        text = replacing(#"\s+on[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)"#, in: text)
+        text = replacing(#"javascript\s*:"#, in: text)
+        text = replacing(#"data\s*:\s*text/html"#, in: text)
+        text = replacing(#"@import\b[^;]*;?"#, in: text)
+        text = replacing(#"url\(\s*(['"]?)\s*(?:https?:|//)[^)]*\)"#, in: text)
+        text = replacing(#"\b(?:href|src|action|poster|srcdoc)\s*=\s*(['"])\s*(?:https?:|//)[^'"]*\1"#, in: text)
+        text = replacing(#"\b(?:href|src|action|poster|srcdoc)\s*=\s*(?:https?:|//)[^\s>]+"#, in: text)
+        text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.count > maximumLength {
+            text = String(text.prefix(maximumLength))
+        }
+        guard containsContent(text) else { return "" }
+        return text
+    }
+
+    private static func stripFence(_ text: String) -> String {
+        var text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard text.hasPrefix("```") else { return text }
+        if let newline = text.firstIndex(of: "\n") {
+            text = String(text[text.index(after: newline)...])
+        } else {
+            return ""
+        }
+        if let end = text.range(of: "```", options: .backwards) {
+            text = String(text[..<end.lowerBound])
+        }
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func containsContent(_ html: String) -> Bool {
+        if html.range(of: "<svg", options: .caseInsensitive) != nil { return true }
+        let withoutStyle = removeElements(named: "style", in: html, throughEndIfUnclosed: false)
+        let stripped = replacing(#"<[^>]+>"#, in: withoutStyle)
+            .replacingOccurrences(of: "&nbsp;", with: " ")
+        return !stripped.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private static func removeElements(named tag: String, in html: String, throughEndIfUnclosed: Bool) -> String {
+        let trailing = throughEndIfUnclosed ? ".*" : "/?>"
+        let pattern = "<\(tag)\\b[^>]*>(?:.*?)</\(tag)\\s*>|<\(tag)\\b[^>]*\(trailing)"
+        return replacing(pattern, in: html)
+    }
+
+    private static func replacing(_ pattern: String, in text: String) -> String {
+        guard let regex = try? NSRegularExpression(
+            pattern: pattern,
+            options: [.caseInsensitive, .dotMatchesLineSeparators]
+        ) else { return text }
+        let range = NSRange(text.startIndex..., in: text)
+        return regex.stringByReplacingMatches(in: text, range: range, withTemplate: "")
     }
 }

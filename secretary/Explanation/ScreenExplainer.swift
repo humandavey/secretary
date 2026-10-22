@@ -28,6 +28,31 @@ enum ExplainerPrompt {
     Labels are two or three words, or empty. Never put coordinates in speech.
     """
 
+    static let apiBehavior = """
+    You are Secretary. A person is asking about everything visible on their Mac screen.
+    annotations are circles, rectangles, and arrows you choose to draw on the screenshot.
+    Add a mark when they ask you to circle or point at something, or when a mark makes the answer easier to see.
+    Leave annotations empty when no drawing is needed.
+    \(coordinates)
+    Labels are two or three words, or empty. Never put coordinates, HTML, or SVG in speech.
+
+    Open a whiteboard when they ask you to explain, diagram, compare, chart, sketch, or teach something, or when a picture would teach the idea better than words. Leave the whiteboard out for a simple question about what is on the screen.
+
+    Reply with no markdown.
+    First, one JSON object and nothing else:
+    {"title": "short title", "speech": "spoken answer", "annotations": [{"shape": "circle", "left": 300, "top": 500, "right": 340, "bottom": 560, "label": "icon"}]}
+    That example is an icon from 30% to 34% across and from 50% to 56% down. Read the real edges from the magenta grid. Do not copy these numbers.
+    shape is circle, rectangle, or arrow. Use an empty annotations array when no mark is needed.
+
+    When you do not open a whiteboard, speech is two or three spoken sentences.
+    When you open a whiteboard, speech is the explanation. Use as many sentences as the concept needs, and walk through what is on the board. Do not read markup aloud.
+
+    To open a whiteboard, put a newline after the JSON, then <<<BOARD>>>, then an HTML fragment, then <<<END>>>.
+    The fragment is inline HTML, CSS, and SVG only. No script, no iframe, and no http or https URL.
+    Draw charts and diagrams as SVG with a viewBox. Use rect, line, path, and text for bars, lines, arrows, and labels. Do not use a chart library.
+    Use h1, p, ul, and svg. A shared stylesheet already styles those. You may add one style block for the diagram.
+    """
+
     static let coordinates = """
     The screenshot has a magenta measuring grid that is not really on the user's screen. Never mention it and never draw a mark on a grid line.
     Numbers along the top are the horizontal scale. Numbers along the left are the vertical scale. Lines are every 100, from 0 at the top-left to 1000 at the bottom-right. Estimate between the lines.
@@ -292,7 +317,7 @@ struct ScreenExplainer {
         }
 
         let endpoint = completionsURL(from: base)
-        var includeFormat = true
+        var tokenField = "max_tokens"
         for _ in 0..<2 {
             let (data, response) = try await send(
                 endpoint: endpoint,
@@ -300,12 +325,12 @@ struct ScreenExplainer {
                 apiKey: apiKey,
                 question: question,
                 jpeg: jpeg,
-                includeFormat: includeFormat
+                tokenField: tokenField
             )
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-            if status == 400, includeFormat, let body = String(data: data, encoding: .utf8),
-               body.localizedCaseInsensitiveContains("response_format") {
-                includeFormat = false
+            if status == 400, tokenField == "max_tokens", let body = String(data: data, encoding: .utf8),
+               body.localizedCaseInsensitiveContains("max_tokens") {
+                tokenField = "max_completion_tokens"
                 continue
             }
             guard (200..<300).contains(status) else {
@@ -328,21 +353,16 @@ struct ScreenExplainer {
         apiKey: String,
         question: String,
         jpeg: Data,
-        includeFormat: Bool
+        tokenField: String
     ) async throws -> (Data, URLResponse) {
-        var body: [String: Any] = [
+        let body: [String: Any] = [
             "model": modelName,
             "temperature": 0,
+            tokenField: 8000,
             "messages": [
                 [
                     "role": "system",
-                    "content": ExplainerPrompt.behavior + """
-
-                    Reply with one JSON object and no markdown. speech must not contain coordinates.
-                    {"title": "short title", "speech": "spoken answer", "annotations": [{"shape": "circle", "left": 300, "top": 500, "right": 340, "bottom": 560, "label": "icon"}]}
-                    That example is an icon from 30% to 34% across and from 50% to 56% down. Read the real edges from the magenta grid. Do not copy these numbers.
-                    shape is circle, rectangle, or arrow. Use an empty annotations array when no mark is needed.
-                    """
+                    "content": ExplainerPrompt.apiBehavior
                 ],
                 [
                     "role": "user",
@@ -353,9 +373,6 @@ struct ScreenExplainer {
                 ]
             ]
         ]
-        if includeFormat {
-            body["response_format"] = ["type": "json_object"]
-        }
 
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"

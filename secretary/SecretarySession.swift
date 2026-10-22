@@ -28,6 +28,8 @@ final class SecretarySession: ObservableObject {
     @Published var answerTitle = ""
     @Published var answerSpeech = ""
     @Published var isListening = false
+    @Published var whiteboardAvailable = false
+    @Published var whiteboardVisible = false
     @Published private(set) var permissionRefresh = 0
 
     let screenCaptureReadyAtLaunch = CGPreflightScreenCaptureAccess()
@@ -35,6 +37,7 @@ final class SecretarySession: ObservableObject {
     private let capture = ScreenCaptureManager()
     private let explainer = ScreenExplainer()
     private let overlay: ScreenOverlayController
+    private let whiteboard = WhiteboardController()
     private var warmSession: LanguageModelSession?
     var hideInterface: (() -> Void)?
     var showInterface: (() -> Void)?
@@ -44,6 +47,9 @@ final class SecretarySession: ObservableObject {
 
     init() {
         overlay = ScreenOverlayController(settings: speechSettings)
+        whiteboard.onVisibilityChange = { [weak self] visible in
+            self?.whiteboardVisible = visible
+        }
         speech.onFinished = { [weak self] text in
             self?.askAboutScreen(text)
         }
@@ -98,10 +104,19 @@ final class SecretarySession: ObservableObject {
 
     func dismissExplanation() {
         overlay.dismiss()
+        clearWhiteboard()
         phase = .idle
         statusText = ""
         answerTitle = ""
         answerSpeech = ""
+    }
+
+    func showWhiteboard() {
+        whiteboard.showAgain()
+    }
+
+    func isWhiteboardWindow(_ window: NSWindow?) -> Bool {
+        whiteboard.isWindow(window)
     }
 
     func repeatAnswer() {
@@ -136,6 +151,7 @@ final class SecretarySession: ObservableObject {
 
     private func run(_ question: String, id: UUID) async {
         overlay.dismiss()
+        clearWhiteboard()
         guard requestID == id else { return }
         lastQuestion = question
         answerTitle = ""
@@ -185,6 +201,10 @@ final class SecretarySession: ObservableObject {
             guard !ready.speech.isEmpty else {
                 throw ExplainerError.message("The model didn't say anything about this screen.")
             }
+            if !ready.whiteboardHTML.isEmpty {
+                whiteboard.present(html: ready.whiteboardHTML, title: ready.title, on: captured.screen)
+                whiteboardAvailable = true
+            }
             phase = .presenting
             statusText = ready.annotations.isEmpty ? "" : "Drew \(ready.annotations.count) on your screen."
             answerTitle = ready.title
@@ -200,7 +220,14 @@ final class SecretarySession: ObservableObject {
             answerTitle = "Something went wrong"
             answerSpeech = message
             overlay.dismiss()
+            clearWhiteboard()
         }
+    }
+
+    private func clearWhiteboard() {
+        whiteboard.dismiss()
+        whiteboardAvailable = false
+        whiteboardVisible = false
     }
 
     private func failureMessage(for error: Error) -> String {

@@ -97,12 +97,23 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
             }
-            .frame(maxHeight: 180)
+            .frame(maxHeight: session.whiteboardAvailable ? 360 : 180)
             if !session.statusText.isEmpty {
                 Text(session.statusText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            if session.whiteboardAvailable {
+                Text("Opened a whiteboard.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if !session.whiteboardVisible {
+                    Button("Show whiteboard") {
+                        session.showWhiteboard()
+                    }
+                    .controlSize(.small)
+                }
             }
             HStack {
                 Button("Dismiss") {

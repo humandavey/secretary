@@ -61,6 +61,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
             .store(in: &cancellables)
+        session.$whiteboardAvailable
+            .dropFirst()
+            .sink { [weak self] _ in
+                DispatchQueue.main.async {
+                    self?.resizePopover()
+                }
+            }
+            .store(in: &cancellables)
         session.hideInterface = { [weak self] in
             self?.closePopover()
         }
@@ -141,6 +149,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if event.window?.level == .popUpMenu {
             return true
         }
+        if session.isWhiteboardWindow(event.window) {
+            return true
+        }
         return false
     }
 
@@ -153,7 +164,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func resizePopover() {
         guard let hosting = popover.contentViewController else { return }
         hosting.view.layoutSubtreeIfNeeded()
-        let height = min(640, max(280, hosting.view.fittingSize.height))
+        let screenLimit = (statusItem?.button?.window?.screen?.visibleFrame.height ?? 800) - 24
+        let preferredLimit: CGFloat = session.whiteboardAvailable ? 760 : 640
+        let height = min(screenLimit, min(preferredLimit, max(280, hosting.view.fittingSize.height)))
         popover.contentSize = NSSize(width: 320, height: height)
     }
 
