@@ -109,7 +109,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             watchOutsideClicks()
         }
         resizePopover()
-        session.setDrawingsVisible(true)
     }
 
     private func closePopover() {
@@ -193,6 +192,5 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 extension AppDelegate: NSPopoverDelegate {
     func popoverDidClose(_ notification: Notification) {
         stopWatchingOutsideClicks()
-        session.setDrawingsVisible(false)
     }
 }

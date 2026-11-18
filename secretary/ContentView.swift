@@ -9,12 +9,14 @@ struct ContentView: View {
     @ObservedObject var session: SecretarySession
     @ObservedObject var settings: ModelSettings
     @ObservedObject var speechSettings: SpeechSettings
+    @ObservedObject var memory: MemoryStore
     @State private var question = ""
 
     init(session: SecretarySession) {
         _session = ObservedObject(wrappedValue: session)
         _settings = ObservedObject(wrappedValue: session.settings)
         _speechSettings = ObservedObject(wrappedValue: session.speechSettings)
+        _memory = ObservedObject(wrappedValue: session.memory)
     }
 
     var body: some View {
@@ -28,9 +30,16 @@ struct ContentView: View {
 
             status
 
+            conversation
+
             questionField
 
             screenAccess
+
+            DisclosureGroup("Memory") {
+                memoryList
+                    .padding(.top, 6)
+            }
 
             DisclosureGroup("Model") {
                 modelSettings
@@ -117,10 +126,10 @@ struct ContentView: View {
             }
             HStack {
                 Button("Dismiss") {
-                    session.dismissExplanation()
+                    session.dismissLesson()
                 }
-                Button("Say it again") {
-                    session.repeatAnswer()
+                Button("Replay") {
+                    session.replayLesson()
                 }
             }
             .controlSize(.small)
@@ -130,7 +139,7 @@ struct ContentView: View {
                 .foregroundStyle(.red)
                 .fixedSize(horizontal: false, vertical: true)
             Button("Dismiss") {
-                session.dismissExplanation()
+                session.dismissLesson()
             }
             .controlSize(.small)
         case .idle:
@@ -138,9 +147,28 @@ struct ContentView: View {
         }
     }
 
+    /// The open conversation, and the way out of it when Secretary carried on one that should have ended.
+    @ViewBuilder
+    private var conversation: some View {
+        if session.thread.isOpen {
+            HStack(alignment: .firstTextBaseline) {
+                Text(session.thread.topic.isEmpty ? "In a conversation" : "Talking about \(session.thread.topic)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                Spacer()
+                Button("New thread") {
+                    session.startNewThread()
+                }
+                .controlSize(.small)
+                .help("Forget this conversation and clear what it drew")
+            }
+        }
+    }
+
     private var questionField: some View {
         VStack(alignment: .leading, spacing: 8) {
-            TextField("Ask about this screen", text: $question)
+            TextField(session.thread.isOpen ? "Ask, or reply" : "Ask anything", text: $question)
                 .textFieldStyle(.roundedBorder)
                 .onSubmit(submitQuestion)
 
@@ -150,10 +178,61 @@ struct ContentView: View {
                 Button("Explain this screen") {
                     session.explainCurrentScreen()
                 }
+                Button("Demo") {
+                    session.playDemo()
+                }
+                .help("Play a short built-in lesson. It needs no model.")
             }
             .controlSize(.small)
 
-            Text("Tap the orb and ask, or type. Secretary sends the whole screen, talks back, and draws where the model chooses.")
+            Text("Tap the orb and ask, or type. Secretary looks at your screen when the question needs it, and draws while it explains.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var memoryList: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if memory.entries.isEmpty {
+                Text("Nothing yet. Secretary notes how you like to learn and what you keep coming back to.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(memory.entries) { entry in
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(entry.kind.title)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                    Text(entry.text)
+                                        .font(.caption)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                                Spacer()
+                                Button {
+                                    memory.delete(entry)
+                                } label: {
+                                    Image(systemName: "trash")
+                                }
+                                .buttonStyle(.borderless)
+                                .help("Forget this")
+                            }
+                        }
+                    }
+                }
+                .frame(maxHeight: 180)
+
+                Button("Forget everything") {
+                    memory.clear()
+                }
+                .controlSize(.small)
+            }
+
+            Text("Kept on this Mac, and sent to your model with each question so it can teach the way you like. A new thread does not erase it.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -273,6 +352,6 @@ struct ContentView: View {
         let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         question = ""
-        session.askAboutScreen(trimmed)
+        session.ask(trimmed)
     }
 }

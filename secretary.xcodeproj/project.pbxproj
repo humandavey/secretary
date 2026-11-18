@@ -6,6 +6,10 @@
 	objectVersion = 110;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		5AFCA6B030894B0000262829 /* SwiftMath in Frameworks */ = {isa = PBXBuildFile; productRef = 5AFCA6B230894B0000262829 /* SwiftMath */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		5AFCA69330894A6100262829 /* secretary.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = secretary.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -22,6 +26,7 @@
 		5AFCA69030894A6100262829 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
+				5AFCA6B030894B0000262829 /* SwiftMath in Frameworks */,
 			);
 		};
 /* End PBXFrameworksBuildPhase section */
@@ -60,6 +65,9 @@
 				5AFCA69530894A6100262829 /* secretary */,
 			);
 			name = secretary;
+			packageProductDependencies = (
+				5AFCA6B230894B0000262829 /* SwiftMath */,
+			);
 			productName = secretary;
 			productReference = 5AFCA69330894A6100262829 /* secretary.app */;
 			productType = "com.apple.product-type.application";
@@ -88,6 +96,9 @@
 			);
 			mainGroup = 5AFCA68A30894A6100262829;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				5AFCA6B130894B0000262829 /* XCRemoteSwiftPackageReference "SwiftMath" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 5AFCA69430894A6100262829 /* Products */;
 			projectDirPath = "";
@@ -347,6 +358,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		5AFCA6B130894B0000262829 /* XCRemoteSwiftPackageReference "SwiftMath" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/mgriebling/SwiftMath.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.7.3;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		5AFCA6B230894B0000262829 /* SwiftMath */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5AFCA6B130894B0000262829 /* XCRemoteSwiftPackageReference "SwiftMath" */;
+			productName = SwiftMath;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 5AFCA68B30894A6100262829 /* Project object */;
 	validationLevel = 1;

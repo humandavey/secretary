@@ -59,12 +59,17 @@ final class ModelSettings: ObservableObject {
         apiKey = KeychainStore.load(account: Keys.apiKeyAccount) ?? ""
     }
 
+    /// Where API requests go, as the fields stand now.
+    var endpoint: ModelEndpoint {
+        ModelEndpoint(baseURL: baseURL, modelName: modelName, apiKey: apiKey)
+    }
+
     var statusNote: String {
         switch provider {
         case .onDevice:
             switch SystemLanguageModel.default.availability {
             case .available:
-                "Apple's on-device model sees the screenshot, but it is weak at colors and at choosing where to draw. An API key is the better choice."
+                "Apple's on-device model looks at your screen and answers in speech only. Drawing, the whiteboard, conversation, and memory need an API model."
             case .unavailable(let reason):
                 switch reason {
                 case .deviceNotEligible:
@@ -80,7 +85,7 @@ final class ModelSettings: ObservableObject {
         case .privateCloud:
             switch privateCloud.availability {
             case .available:
-                "Apple's larger model sees the whole screenshot through Private Cloud Compute, not a third-party API."
+                "Apple's larger model sees the whole screenshot through Private Cloud Compute, not a third-party API. It answers in speech only. Drawing, the whiteboard, conversation, and memory need an API model."
             case .unavailable(let reason):
                 switch reason {
                 case .deviceNotEligible:
@@ -93,8 +98,8 @@ final class ModelSettings: ObservableObject {
             }
         case .api:
             apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !baseURL.contains("localhost")
-                ? "Paste an OpenAI API key. Secretary sends a screenshot of the whole screen, and the model decides what to circle."
-                : "Secretary sends a screenshot of the whole screen. The model answers and decides what to circle."
+                ? "Paste an API key. Secretary sends your question, the conversation, its memory of you, and a screenshot when the question needs one."
+                : "Secretary sends your question, the conversation, its memory of you, and a screenshot when the question needs one."
         }
     }
 
